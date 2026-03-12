@@ -1,13 +1,15 @@
+import "dotenv/config";
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
-import Database from "better-sqlite3";
+import sqlite3 from "sqlite3";
+import { open, Database } from "sqlite";
 import multer from "multer";
 import { GoogleGenAI, Type } from "@google/genai";
 import { Parser } from "json2csv";
 import ExcelJS from "exceljs";
 import Papa from "papaparse";
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
@@ -32,121 +34,125 @@ if (JWT_SECRET === "fallback_secret_for_dev") {
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
-// Database Setup
-const db = new Database("capmap.db");
-db.pragma("journal_mode = WAL");
-
-// Initialize Tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    email TEXT UNIQUE,
-    password_hash TEXT,
-    role TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS it_assets (
-    id TEXT PRIMARY KEY,
-    name TEXT,
-    type TEXT,
-    environment TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS capabilities (
-    id TEXT PRIMARY KEY,
-    name TEXT,
-    domain TEXT,
-    maturity_level INTEGER,
-    owner TEXT,
-    linked_system_ids TEXT,
-    cost_center TEXT,
-    sla_target_ms INTEGER,
-    last_reviewed DATETIME
-  );
-
-  CREATE TABLE IF NOT EXISTS processes (
-    id TEXT PRIMARY KEY,
-    name TEXT,
-    owner TEXT,
-    domain TEXT,
-    capability_id TEXT,
-    FOREIGN KEY(capability_id) REFERENCES capabilities(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS relationships (
-    id TEXT PRIMARY KEY,
-    source_id TEXT,
-    source_type TEXT,
-    target_id TEXT,
-    target_type TEXT,
-    relationship_type TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS metrics (
-    id TEXT PRIMARY KEY,
-    capability_id TEXT,
-    prompt_hash TEXT,
-    kpi_json TEXT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(capability_id) REFERENCES capabilities(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS visualizations (
-    id TEXT PRIMARY KEY,
-    user_id TEXT,
-    prompt TEXT,
-    image_data TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS capability_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT,
-    snapshot_date TEXT UNIQUE,
-    avg_maturity REAL
-  );
-
-  CREATE TABLE IF NOT EXISTS interaction_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT,
-    event_type TEXT,
-    entity_type TEXT,
-    entity_id TEXT,
-    metadata_json TEXT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS demo_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT,
-    event_type TEXT,
-    step INTEGER,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS generation_usage (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT,
-    date TEXT,
-    count INTEGER,
-    UNIQUE(user_id, date)
-  );
-
-  -- Seed Data
-  INSERT OR IGNORE INTO capabilities (id, name, domain, maturity_level) VALUES 
-  ('cap1', 'Strategic Planning', 'Strategy', 4),
-  ('cap2', 'Supply Chain Management', 'Operations', 3),
-  ('cap3', 'Customer Relationship Management', 'Sales', 5),
-  ('cap4', 'Financial Reporting', 'Finance', 4),
-  ('cap5', 'Talent Acquisition', 'HR', 2);
-`);
-
 const upload = multer({ storage: multer.memoryStorage() });
 
 async function startServer() {
   const app = express();
   app.use(express.json());
   app.use(cookieParser());
+
+  // Database Setup
+  const db = await open({
+    filename: "capmap.db",
+    driver: sqlite3.Database
+  });
+
+  await db.exec("PRAGMA journal_mode = WAL");
+
+  // Initialize Tables
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT UNIQUE,
+      password_hash TEXT,
+      role TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS it_assets (
+      id TEXT PRIMARY KEY,
+      name TEXT,
+      type TEXT,
+      environment TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS capabilities (
+      id TEXT PRIMARY KEY,
+      name TEXT,
+      domain TEXT,
+      maturity_level INTEGER,
+      owner TEXT,
+      linked_system_ids TEXT,
+      cost_center TEXT,
+      sla_target_ms INTEGER,
+      last_reviewed DATETIME
+    );
+
+    CREATE TABLE IF NOT EXISTS processes (
+      id TEXT PRIMARY KEY,
+      name TEXT,
+      owner TEXT,
+      domain TEXT,
+      capability_id TEXT,
+      FOREIGN KEY(capability_id) REFERENCES capabilities(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS relationships (
+      id TEXT PRIMARY KEY,
+      source_id TEXT,
+      source_type TEXT,
+      target_id TEXT,
+      target_type TEXT,
+      relationship_type TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS metrics (
+      id TEXT PRIMARY KEY,
+      capability_id TEXT,
+      prompt_hash TEXT,
+      kpi_json TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(capability_id) REFERENCES capabilities(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS visualizations (
+      id TEXT PRIMARY KEY,
+      user_id TEXT,
+      prompt TEXT,
+      image_data TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS capability_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      snapshot_date TEXT UNIQUE,
+      avg_maturity REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS interaction_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      event_type TEXT,
+      entity_type TEXT,
+      entity_id TEXT,
+      metadata_json TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS demo_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      event_type TEXT,
+      step INTEGER,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS generation_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      date TEXT,
+      count INTEGER,
+      UNIQUE(user_id, date)
+    );
+
+    -- Seed Data
+    INSERT OR IGNORE INTO capabilities (id, name, domain, maturity_level) VALUES 
+    ('cap1', 'Strategic Planning', 'Strategy', 4),
+    ('cap2', 'Supply Chain Management', 'Operations', 3),
+    ('cap3', 'Customer Relationship Management', 'Sales', 5),
+    ('cap4', 'Financial Reporting', 'Finance', 4),
+    ('cap5', 'Talent Acquisition', 'HR', 2);
+  `);
 
   // Auth Middleware
   const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -171,11 +177,11 @@ async function startServer() {
   app.post("/api/auth/login", async (req, res, next) => {
     try {
       const { email } = req.body;
-      let user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
+      let user = await db.get("SELECT * FROM users WHERE email = ?", email) as any;
       if (!user) {
         const id = Math.random().toString(36).substring(7);
         const password_hash = await bcrypt.hash("default_password", 10);
-        db.prepare("INSERT INTO users (id, email, password_hash, role) VALUES (?, ?, ?, ?)").run(id, email, password_hash, "user");
+        await db.run("INSERT INTO users (id, email, password_hash, role) VALUES (?, ?, ?, ?)", id, email, password_hash, "user");
         user = { id, email, role: "user" };
       }
       const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: "24h" });
@@ -187,15 +193,15 @@ async function startServer() {
   });
 
   // Capabilities
-  app.get("/api/capabilities", (req, res) => {
-    const caps = db.prepare("SELECT * FROM capabilities").all();
+  app.get("/api/capabilities", async (req, res) => {
+    const caps = await db.all("SELECT * FROM capabilities");
     res.json(caps);
   });
 
-  app.post("/api/capabilities", (req, res) => {
+  app.post("/api/capabilities", async (req, res) => {
     const { name, domain, maturity_level } = req.body;
     const id = Math.random().toString(36).substring(7);
-    db.prepare("INSERT INTO capabilities (id, name, domain, maturity_level) VALUES (?, ?, ?, ?)").run(id, name, domain, maturity_level);
+    await db.run("INSERT INTO capabilities (id, name, domain, maturity_level) VALUES (?, ?, ?, ?)", id, name, domain, maturity_level);
     res.json({ id, name, domain, maturity_level });
   });
 
@@ -207,12 +213,12 @@ async function startServer() {
       
       // Quota Check
       const today = new Date().toISOString().split("T")[0];
-      let usage = db.prepare("SELECT count FROM generation_usage WHERE user_id = ? AND date = ?").get(userId, today) as any;
+      let usage = await db.get("SELECT count FROM generation_usage WHERE user_id = ? AND date = ?", userId, today) as any;
       if (usage && usage.count >= 50) {
         return res.status(429).json({ error: "Daily AI generation limit reached. Please try again after 24 hours." });
       }
 
-      const capability = db.prepare("SELECT * FROM capabilities WHERE id = ?").get(capabilityId) as any;
+      const capability = await db.get("SELECT * FROM capabilities WHERE id = ?", capabilityId) as any;
       if (!capability) return res.status(404).json({ error: "Capability not found" });
 
       let extraContext = "";
@@ -228,7 +234,7 @@ async function startServer() {
       const promptHash = crypto.createHash("sha256").update(prompt).digest("hex");
 
       // Cache Check (24h TTL)
-      const cached = db.prepare("SELECT * FROM metrics WHERE capability_id = ? AND prompt_hash = ? AND timestamp >= datetime('now', '-1 day') ORDER BY timestamp DESC LIMIT 1").get(capabilityId, promptHash) as any;
+      const cached = await db.get("SELECT * FROM metrics WHERE capability_id = ? AND prompt_hash = ? AND timestamp >= datetime('now', '-1 day') ORDER BY timestamp DESC LIMIT 1", capabilityId, promptHash) as any;
       if (cached) {
         return res.json(JSON.parse(cached.kpi_json));
       }
@@ -257,13 +263,13 @@ async function startServer() {
 
       const metricsJson = response.text;
       const id = Math.random().toString(36).substring(7);
-      db.prepare("INSERT INTO metrics (id, capability_id, prompt_hash, kpi_json) VALUES (?, ?, ?, ?)").run(id, capabilityId, promptHash, metricsJson);
+      await db.run("INSERT INTO metrics (id, capability_id, prompt_hash, kpi_json) VALUES (?, ?, ?, ?)", id, capabilityId, promptHash, metricsJson);
       
       // Update usage
       if (usage) {
-        db.prepare("UPDATE generation_usage SET count = count + 1 WHERE user_id = ? AND date = ?").run(userId, today);
+        await db.run("UPDATE generation_usage SET count = count + 1 WHERE user_id = ? AND date = ?", userId, today);
       } else {
-        db.prepare("INSERT INTO generation_usage (user_id, date, count) VALUES (?, ?, 1)").run(userId, today);
+        await db.run("INSERT INTO generation_usage (user_id, date, count) VALUES (?, ?, 1)", userId, today);
       }
 
       res.json(JSON.parse(metricsJson));
@@ -274,20 +280,19 @@ async function startServer() {
   });
 
   // Dashboard
-  app.get("/api/dashboard", (req, res) => {
-    const totalCapabilities = db.prepare("SELECT COUNT(*) as count FROM capabilities").get() as any;
-    const totalSystems = db.prepare("SELECT COUNT(*) as count FROM it_assets").get() as any;
-    const avgMaturity = db.prepare("SELECT AVG(maturity_level) as avg FROM capabilities").get() as any;
+  app.get("/api/dashboard", async (req, res) => {
+    const totalCapabilities = await db.get("SELECT COUNT(*) as count FROM capabilities") as any;
+    const totalSystems = await db.get("SELECT COUNT(*) as count FROM it_assets") as any;
+    const avgMaturity = await db.get("SELECT AVG(maturity_level) as avg FROM capabilities") as any;
     
     const today = new Date().toISOString().split("T")[0];
     const userId = (req as any).user?.id || "anonymous";
-    db.prepare("INSERT INTO capability_snapshots (user_id, snapshot_date, avg_maturity) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM capability_snapshots WHERE snapshot_date = ?)").run(userId, today, avgMaturity.avg || 0, today);
-
+    await db.run("INSERT INTO capability_snapshots (user_id, snapshot_date, avg_maturity) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM capability_snapshots WHERE snapshot_date = ?)", userId, today, avgMaturity.avg || 0, today);
 
     // Mocking some chart data based on real counts for simplicity, or we can aggregate
-    const domainDistribution = db.prepare("SELECT domain as name, COUNT(*) as value FROM capabilities GROUP BY domain").all();
+    const domainDistribution = await db.all("SELECT domain as name, COUNT(*) as value FROM capabilities GROUP BY domain");
     
-    const snapshots = db.prepare("SELECT snapshot_date as name, avg_maturity as value FROM capability_snapshots ORDER BY snapshot_date ASC").all() as any[];
+    const snapshots = await db.all("SELECT snapshot_date as name, avg_maturity as value FROM capability_snapshots ORDER BY snapshot_date ASC") as any[];
 
     res.json({
       metrics: {
@@ -334,7 +339,7 @@ async function startServer() {
 
       if (imageData) {
         const id = Math.random().toString(36).substring(7);
-        db.prepare("INSERT INTO visualizations (id, user_id, prompt, image_data) VALUES (?, ?, ?, ?)").run(id, userId, prompt, imageData);
+        await db.run("INSERT INTO visualizations (id, user_id, prompt, image_data) VALUES (?, ?, ?, ?)", id, userId, prompt, imageData);
         res.json({ id, prompt, imageData });
       } else {
         res.status(500).json({ error: "Failed to generate image" });
@@ -345,29 +350,29 @@ async function startServer() {
     }
   });
 
-  app.get("/api/visualizations", (req, res) => {
+  app.get("/api/visualizations", async (req, res) => {
     const userId = (req as any).user.id;
-    const history = db.prepare("SELECT * FROM visualizations WHERE user_id = ? ORDER BY created_at DESC").all(userId);
+    const history = await db.all("SELECT * FROM visualizations WHERE user_id = ? ORDER BY created_at DESC", userId);
     res.json(history);
   });
 
   // Interaction Logging
-  app.post("/api/user/interactions", (req, res) => {
+  app.post("/api/user/interactions", async (req, res) => {
     const { userId, eventType, entityType, entityId, metadata } = req.body;
-    db.prepare("INSERT INTO interaction_events (user_id, event_type, entity_type, entity_id, metadata_json) VALUES (?, ?, ?, ?, ?)")
-      .run(userId, eventType, entityType, entityId, JSON.stringify(metadata));
+    await db.run("INSERT INTO interaction_events (user_id, event_type, entity_type, entity_id, metadata_json) VALUES (?, ?, ?, ?, ?)",
+      userId, eventType, entityType, entityId, JSON.stringify(metadata));
     res.json({ status: "ok" });
   });
 
   // Demo Endpoints
-  app.post("/api/demo/event", (req, res) => {
+  app.post("/api/demo/event", async (req, res) => {
     const { userId, eventType, step } = req.body;
-    db.prepare("INSERT INTO demo_events (user_id, event_type, step) VALUES (?, ?, ?)")
-      .run(userId, eventType, step);
+    await db.run("INSERT INTO demo_events (user_id, event_type, step) VALUES (?, ?, ?)",
+      userId, eventType, step);
     res.json({ status: "ok" });
   });
 
-  app.post("/api/demo/load", (req, res) => {
+  app.post("/api/demo/load", async (req, res) => {
     const csvString = `IT System,Capability,Business Process,Owner,Environment
 Salesforce,Customer Management,Lead Processing,Sales,SaaS
 AWS Lambda,Order Processing,Checkout Fulfillment,Engineering,Cloud
@@ -379,13 +384,8 @@ Legacy CRM,Customer Management,Account Updates,Sales,On-Prem`;
     const rows = parsed.data as any[];
     let inserted = 0;
 
-    const insertCap = db.prepare("INSERT OR IGNORE INTO capabilities (id, name, domain, maturity_level) VALUES (?, ?, ?, ?)");
-    const insertAsset = db.prepare("INSERT OR IGNORE INTO it_assets (id, name, type, environment) VALUES (?, ?, ?, ?)");
-    const insertProcess = db.prepare("INSERT OR IGNORE INTO processes (id, name, owner, domain, capability_id) VALUES (?, ?, ?, ?, ?)");
-    const insertRel = db.prepare("INSERT OR IGNORE INTO relationships (id, source_id, source_type, target_id, target_type, relationship_type) VALUES (?, ?, ?, ?, ?, ?)");
-    const insertMetric = db.prepare("INSERT OR REPLACE INTO metrics (capability_id, kpi_json) VALUES (?, ?)");
-
-    db.transaction(() => {
+    await db.run("BEGIN TRANSACTION");
+    try {
       for (const row of rows) {
         const assetName = row["IT System"];
         const capName = row["Capability"];
@@ -396,19 +396,19 @@ Legacy CRM,Customer Management,Account Updates,Sales,On-Prem`;
         if (!capName) continue;
 
         const capId = `cap_${capName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`;
-        insertCap.run(capId, capName, "Demo", 3);
+        await db.run("INSERT OR IGNORE INTO capabilities (id, name, domain, maturity_level) VALUES (?, ?, ?, ?)", capId, capName, "Demo", 3);
 
         if (assetName) {
           const assetId = `asset_${assetName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`;
-          insertAsset.run(assetId, assetName, "System", env || "Production");
+          await db.run("INSERT OR IGNORE INTO it_assets (id, name, type, environment) VALUES (?, ?, ?, ?)", assetId, assetName, "System", env || "Production");
           
           const relId = `rel_${assetId}_${capId}`;
-          insertRel.run(relId, assetId, "it_asset", capId, "capability", "supports");
+          await db.run("INSERT OR IGNORE INTO relationships (id, source_id, source_type, target_id, target_type, relationship_type) VALUES (?, ?, ?, ?, ?, ?)", relId, assetId, "it_asset", capId, "capability", "supports");
         }
 
         if (processName) {
           const processId = `proc_${processName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`;
-          insertProcess.run(processId, processName, owner || "Unknown", "Demo", capId);
+          await db.run("INSERT OR IGNORE INTO processes (id, name, owner, domain, capability_id) VALUES (?, ?, ?, ?, ?)", processId, processName, owner || "Unknown", "Demo", capId);
         }
         
         inserted++;
@@ -425,7 +425,7 @@ Legacy CRM,Customer Management,Account Updates,Sales,On-Prem`;
         { name: "Modernization Priority", value: 100, unit: "Score", description: "Urgent need to retire Legacy CRM." },
         { name: "Value Contribution", value: 80, unit: "Score", description: "High value, but hampered by tech debt." }
       ];
-      insertMetric.run("cap_customermanagement", JSON.stringify(custMgmtMetrics));
+      await db.run("INSERT OR REPLACE INTO metrics (capability_id, kpi_json) VALUES (?, ?)", "cap_customermanagement", JSON.stringify(custMgmtMetrics));
 
       const orderProcMetrics = [
         { name: "Operational Efficiency", value: 92, unit: "%", description: "Highly efficient serverless architecture." },
@@ -437,8 +437,13 @@ Legacy CRM,Customer Management,Account Updates,Sales,On-Prem`;
         { name: "Modernization Priority", value: 10, unit: "Score", description: "Already modernized." },
         { name: "Value Contribution", value: 95, unit: "Score", description: "Directly drives fulfillment." }
       ];
-      insertMetric.run("cap_orderprocessing", JSON.stringify(orderProcMetrics));
-    })();
+      await db.run("INSERT OR REPLACE INTO metrics (capability_id, kpi_json) VALUES (?, ?)", "cap_orderprocessing", JSON.stringify(orderProcMetrics));
+      
+      await db.run("COMMIT");
+    } catch (e) {
+      await db.run("ROLLBACK");
+      throw e;
+    }
 
     res.json({ success: true, rowsProcessed: inserted });
   });
@@ -452,7 +457,7 @@ Legacy CRM,Customer Management,Account Updates,Sales,On-Prem`;
   });
 
   // Upload Dataset (Bulk Capabilities)
-  app.post("/api/capabilities/bulk", upload.single("file"), (req, res) => {
+  app.post("/api/capabilities/bulk", upload.single("file"), async (req, res) => {
     const file = (req as any).file;
     if (!file) return res.status(400).json({ error: "No file uploaded" });
     
@@ -483,63 +488,60 @@ Legacy CRM,Customer Management,Account Updates,Sales,On-Prem`;
 
     let inserted = 0;
 
-    const insertCap = db.prepare("INSERT OR REPLACE INTO capabilities (id, name, domain, maturity_level, owner, linked_system_ids, cost_center, sla_target_ms, last_reviewed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-    const insertAsset = db.prepare("INSERT OR IGNORE INTO it_assets (id, name, type, environment) VALUES (?, ?, ?, ?)");
-    const insertProcess = db.prepare("INSERT OR IGNORE INTO processes (id, name, owner, domain, capability_id) VALUES (?, ?, ?, ?, ?)");
-    const insertRel = db.prepare("INSERT OR IGNORE INTO relationships (id, source_id, source_type, target_id, target_type, relationship_type) VALUES (?, ?, ?, ?, ?, ?)");
-
+    await db.run("BEGIN TRANSACTION");
     try {
-      db.transaction(() => {
-        for (const row of rows) {
-          // Find the actual header key that matches case-insensitively
-          const capKey = Object.keys(row).find(k => k.trim().toLowerCase() === 'capability' || k.trim().toLowerCase() === 'name');
-          if (!capKey) continue;
+      for (const row of rows) {
+        // Find the actual header key that matches case-insensitively
+        const capKey = Object.keys(row).find(k => k.trim().toLowerCase() === 'capability' || k.trim().toLowerCase() === 'name');
+        if (!capKey) continue;
+        
+        const capName = row[capKey]?.trim();
+        if (!capName) continue;
+
+        const domainKey = Object.keys(row).find(k => k.trim().toLowerCase() === 'domain');
+        const domain = domainKey ? row[domainKey] : "Imported";
+        
+        const ownerKey = Object.keys(row).find(k => k.trim().toLowerCase() === 'owner');
+        const owner = ownerKey ? row[ownerKey] : "";
+        
+        const systemKey = Object.keys(row).find(k => k.trim().toLowerCase() === 'it system');
+        const systemName = systemKey ? row[systemKey]?.trim() : "";
+
+        const processKey = Object.keys(row).find(k => k.trim().toLowerCase() === 'business process');
+        const processName = processKey ? row[processKey]?.trim() : "";
+
+        const envKey = Object.keys(row).find(k => k.trim().toLowerCase() === 'environment');
+        const env = envKey ? row[envKey]?.trim() : "Production";
+
+        const capId = `cap_${capName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`;
+        await db.run("INSERT OR REPLACE INTO capabilities (id, name, domain, maturity_level, owner, linked_system_ids, cost_center, sla_target_ms, last_reviewed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          capId, capName, domain || "Imported", 1, owner, systemName, "", 0, new Date().toISOString());
+        
+        if (systemName) {
+          const assetId = `asset_${systemName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`;
+          await db.run("INSERT OR IGNORE INTO it_assets (id, name, type, environment) VALUES (?, ?, ?, ?)", assetId, systemName, "System", env || "Production");
           
-          const capName = row[capKey]?.trim();
-          if (!capName) continue;
-
-          // Map other optional columns
-          const domainKey = Object.keys(row).find(k => k.trim().toLowerCase() === 'domain');
-          const domain = domainKey ? row[domainKey] : "Imported";
-          
-          const ownerKey = Object.keys(row).find(k => k.trim().toLowerCase() === 'owner');
-          const owner = ownerKey ? row[ownerKey] : "";
-          
-          const systemKey = Object.keys(row).find(k => k.trim().toLowerCase() === 'it system');
-          const systemName = systemKey ? row[systemKey]?.trim() : "";
-
-          const processKey = Object.keys(row).find(k => k.trim().toLowerCase() === 'business process');
-          const processName = processKey ? row[processKey]?.trim() : "";
-
-          const envKey = Object.keys(row).find(k => k.trim().toLowerCase() === 'environment');
-          const env = envKey ? row[envKey]?.trim() : "Production";
-
-          const capId = `cap_${capName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`;
-          insertCap.run(capId, capName, domain || "Imported", 1, owner, systemName, "", 0, new Date().toISOString());
-          
-          if (systemName) {
-            const assetId = `asset_${systemName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`;
-            insertAsset.run(assetId, systemName, "System", env || "Production");
-            
-            const relId = `rel_${assetId}_${capId}`;
-            insertRel.run(relId, assetId, "it_asset", capId, "capability", "supports");
-          }
-
-          if (processName) {
-            const processId = `proc_${processName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`;
-            insertProcess.run(processId, processName, owner || "Unknown", domain || "Imported", capId);
-          }
-
-          inserted++;
+          const relId = `rel_${assetId}_${capId}`;
+          await db.run("INSERT OR IGNORE INTO relationships (id, source_id, source_type, target_id, target_type, relationship_type) VALUES (?, ?, ?, ?, ?, ?)", relId, assetId, "it_asset", capId, "capability", "supports");
         }
 
-        const today = new Date().toISOString().split("T")[0];
-        const userId = (req as any).user?.id || "anonymous";
-        const avgMaturityResult = db.prepare("SELECT AVG(maturity_level) as avg FROM capabilities").get() as any;
-        const avgMaturity = avgMaturityResult.avg || 0;
-        db.prepare("INSERT INTO capability_snapshots (user_id, snapshot_date, avg_maturity) VALUES (?, ?, ?) ON CONFLICT(snapshot_date) DO UPDATE SET avg_maturity = excluded.avg_maturity, user_id = excluded.user_id").run(userId, today, avgMaturity);
-      })();
+        if (processName) {
+          const processId = `proc_${processName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`;
+          await db.run("INSERT OR IGNORE INTO processes (id, name, owner, domain, capability_id) VALUES (?, ?, ?, ?, ?)", processId, processName, owner || "Unknown", domain || "Imported", capId);
+        }
+
+        inserted++;
+      }
+
+      const today = new Date().toISOString().split("T")[0];
+      const userId = (req as any).user?.id || "anonymous";
+      const avgMaturityResult = await db.get("SELECT AVG(maturity_level) as avg FROM capabilities") as any;
+      const avgMaturity = avgMaturityResult.avg || 0;
+      await db.run("INSERT INTO capability_snapshots (user_id, snapshot_date, avg_maturity) VALUES (?, ?, ?) ON CONFLICT(snapshot_date) DO UPDATE SET avg_maturity = excluded.avg_maturity, user_id = excluded.user_id", userId, today, avgMaturity);
+      
+      await db.run("COMMIT");
     } catch (err: any) {
+      await db.run("ROLLBACK");
       return res.status(500).json({ error: "Failed to process rows", details: err.message });
     }
 
@@ -555,12 +557,11 @@ Legacy CRM,Customer Management,Account Updates,Sales,On-Prem`;
     try {
       const { type } = req.body;
       
-      // Fetch capabilities and their metrics
-      const data = db.prepare(`
+      const data = await db.all(`
         SELECT c.name as Capability, c.domain as Domain, c.maturity_level as Maturity, m.kpi_json as Metrics
         FROM capabilities c
         LEFT JOIN metrics m ON c.id = m.capability_id
-      `).all() as any[];
+      `) as any[];
 
       const formattedData = data.map(row => {
         const base: any = {
